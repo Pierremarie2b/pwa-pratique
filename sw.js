@@ -1,4 +1,5 @@
 console.log("hello depuis le service worker");
+self.importScripts('idb/idb.js', 'idb/database.js');
 
 self.addEventListener('install', (evt) => {
     console.log(`sw installé à ${new Date().toLocaleTimeString()}`);
@@ -18,6 +19,30 @@ self.addEventListener('activate', (evt) => {
 
     evt.waitUntil(cacheCleanPromise);
 });
+
+	
+self.addEventListener('fetch', (evt) => {
+    if(evt.request.method === 'POST') {
+        return;
+    }
+    // 5.3 Stratégie de network first with cache fallback
+    // On doit envoyer une réponse
+    evt.respondWith(
+        // on doit d'abord faire une requête sur le réseau de ce qui a été intercepté
+        fetch(evt.request).then(res => {
+            console.log("url récupérée depuis le réseau", evt.request.url);
+            // mettre dans le cache le résultat de cette réponse : en clef la requête et en valeur la réponse
+            caches.open(cacheName).then(cache => cache.put(evt.request, res));
+            // quand on a la réponse on la retourne (clone car on ne peut la lire qu'une fois)
+            return res.clone();
+        })
+        // Si on a une erreur et que l'on arrive pas à récupérer depuis le réseau, on va chercher dans le cache
+        .catch(err => {
+            console.log("url récupérée depuis le cache", evt.request.url);
+            return caches.match(evt.request);
+        })
+    );
+
 
 self.addEventListener('fetch', (evt) => {
     console.log('sw intercepte la requête suivante via fetch', evt);
@@ -160,13 +185,60 @@ self.addEventListener("push", evt => {
     };
     self.registration.showNotification(title, objNotification);
 })
-const cacheName = 'veille-techno' + '1.2';
 
+const cacheName = 'veille-techno' + '1.3';
+
+
+self.addEventListener('sync', event => {
+    console.log('sync event', event);
+    // test du tag de synchronisation utilisé dans add_techno
+    if (event.tag === 'sync-technos') {
+        console.log('syncing', event.tag);
+        // Utilisation de waitUntil pour s'assurer que le code est exécuté (Attend une promise)
+        event.waitUntil(updateTechnoPromise);
+    }
+})
+
+	
+const updateTechnoPromise = new Promise(function(resolve, reject) {
+ 
+    // récupération de la liste des technos de indexedDB
+    getAllTechnos().then(technos => {
+        console.log('got technos from sync callback', technos);
+        
+        // pour chaque item : appel de l'api pour l'ajouter à la base
+        technos.map(techno => {
+            console.log('Attempting fetch', techno);
+            fetch('https://us-central1-pwa-technos-giancoli.cloudfunctions.net/addTechno', {
+                headers: {
+                    'Accept': 'application/json',
+                    'Content-Type': 'application/json'
+                },
+                method: 'POST',
+                body: JSON.stringify(techno)
+            })
+            .then(() => {
+                // Succès : suppression de l'item en local si ajouté en distant
+                console.log('Success update et id supprimée', techno.id);
+                return deleteTechno(techno.id);
+            })
+            .catch(err => {
+                // Erreur
+                console.log('Error update et id supprimée', err);
+                resolve(err);
+            })
+        })
+ 
+    })
+});
 self.addEventListener('install', (evt) => {
     console.log(`sw installé à ${new Date().toLocaleTimeString()}`);
 
     const cachePromise = caches.open(cacheName).then(cache => {
         return cache.addAll([
+          // 9.4 Ajouter les librairies iDB
+            'idb/idb.js',
+            'idb/database.js',
             'index.html',
             'main.js',
             'style.css',
@@ -183,6 +255,9 @@ self.addEventListener('install', (evt) => {
     evt.waitUntil(cachePromise);
 
 });
+});
+
+
 
 //..
 
